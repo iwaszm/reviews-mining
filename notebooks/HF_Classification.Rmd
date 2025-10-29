@@ -1,0 +1,224 @@
+---
+title: "sentiment-and-topic-classification"
+date: '2025-10-01'
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+---
+
+```{r , global_options, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, echo = FALSE,message = FALSE ,cache = FALSE, cache.lazy = FALSE)
+library(httr)
+library(jsonlite)
+library(knitr)
+library(dplyr)
+
+# 1. Load Hugging Face API key from environment
+hf_key <- Sys.getenv("HF_API_KEY")
+
+# 2. Input review
+input_text <- ""
+
+# 3. Define label sets
+sentiment_labels <- c("positive", "negative", "neutral")
+topic_labels <- c("functionality", "user interface", "performance", "ads", "other")
+
+# 4. Define model endpoints
+models <- list(
+  "facebook/bart-large-mnli" = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli",
+  "joeddav/xlm-roberta-large-xnli" = "https://api-inference.huggingface.co/models/joeddav/xlm-roberta-large-xnli",
+  "cardiffnlp/twitter-roberta-base-sentiment-latest" = "https://api-inference.huggingface.co/models/cardiffnlp/twitter-roberta-base-sentiment-latest",
+  "nlptown/bert-base-multilingual-uncased-sentiment" = "https://api-inference.huggingface.co/models/nlptown/bert-base-multilingual-uncased-sentiment",
+  "siebert/sentiment-roberta-large-english" = "https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english",
+  "typeform/distilbert-base-uncased-mnli" = "https://api-inference.huggingface.co/models/typeform/distilbert-base-uncased-mnli"
+)
+
+# 5. Authentication header
+headers <- add_headers(
+  Authorization = paste("Bearer", hf_key),
+  `Content-Type` = "application/json",
+  Accept = "application/json"
+)
+
+# 6. Helper: extract top label from zero-shot output
+extract_top_label <- function(result) {
+  # Case 1: bart-large-mnli / xlm-roberta (flat structure with labels/scores)
+  if (!is.null(result$labels) && !is.null(result$scores)) {
+    return(result$labels[[which.max(unlist(result$scores))]])
+  }
+  
+  # Case 2: cardiffnlp or similar (list of results with label/score)
+  if (is.list(result) && is.list(result[[1]]) && !is.null(result[[1]][[1]]$label)) {
+    labels <- sapply(result[[1]], function(x) x$label)
+    scores <- sapply(result[[1]], function(x) x$score)
+    return(labels[[which.max(scores)]])
+  }
+
+  # Case 3: nlptown star ratings (e.g., "3 stars" → map to sentiment)
+  if (is.list(result) && is.list(result[[1]]) && grepl("stars?", result[[1]][[1]]$label)) {
+    stars <- sapply(result[[1]], function(x) x$label)
+    scores <- sapply(result[[1]], function(x) x$score)
+    top_label <- stars[[which.max(scores)]]
+    
+    # Optional: map stars to sentiment
+    star_num <- as.numeric(sub(" .*", "", top_label))
+    if (is.na(star_num)) return(top_label)
+    if (star_num <= 2) return("negative")
+    if (star_num == 3) return("neutral")
+    return("positive")
+  }
+
+  return(NA)
+}
+
+
+# 7. Initialize result storage
+output_df <- data.frame(
+  Model = names(models),
+  Sentiment = NA_character_,
+  Category = NA_character_,
+  stringsAsFactors = FALSE
+)
+```
+
+# "I am ok with the UI, it can be better though." 
+
+```{r classification loop 1}
+input_text <- "I am ok with the UI, it can be better though"
+
+# 8. Loop through each model
+for (i in seq_along(models)) {
+  model_name <- names(models)[i]
+  url <- models[[i]]
+  
+  # --- Sentiment classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_sentiment <- list(inputs = input_text, parameters = list(candidate_labels = sentiment_labels))
+  } else {
+    body_sentiment <- list(inputs = input_text)
+  }
+  res1 <- POST(url, headers, body = body_sentiment, encode = "json")
+  result1 <- content(res1, as = "parsed", encoding = "UTF-8")
+  output_df$Sentiment[i] <- extract_top_label(result1)
+  
+  # --- Topic classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_topic <- list(inputs = input_text, parameters = list(candidate_labels = topic_labels))
+    res2 <- POST(url, headers, body = body_topic, encode = "json")
+    result2 <- content(res2, as = "parsed", encoding = "UTF-8")
+    output_df$Category[i] <- extract_top_label(result2)
+  } else {
+    output_df$Category[i] <- NA  # Not supported by fixed sentiment-only models
+  }
+}
+
+# 9. Display results
+kable(output_df, caption = "Top classification results per model")
+```
+
+# "The app is smooth and reliable, everything works exactly as expected." 
+```{r classification loop 2}
+input_text <- "The app is smooth and reliable, everything works exactly as expected."
+
+# 8. Loop through each model
+for (i in seq_along(models)) {
+  model_name <- names(models)[i]
+  url <- models[[i]]
+  
+  # --- Sentiment classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_sentiment <- list(inputs = input_text, parameters = list(candidate_labels = sentiment_labels))
+  } else {
+    body_sentiment <- list(inputs = input_text)
+  }
+  res1 <- POST(url, headers, body = body_sentiment, encode = "json")
+  result1 <- content(res1, as = "parsed", encoding = "UTF-8")
+  output_df$Sentiment[i] <- extract_top_label(result1)
+  
+  # --- Topic classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_topic <- list(inputs = input_text, parameters = list(candidate_labels = topic_labels))
+    res2 <- POST(url, headers, body = body_topic, encode = "json")
+    result2 <- content(res2, as = "parsed", encoding = "UTF-8")
+    output_df$Category[i] <- extract_top_label(result2)
+  } else {
+    output_df$Category[i] <- NA  # Not supported by fixed sentiment-only models
+  }
+}
+
+# 9. Display results
+kable(output_df, caption = "Top classification results per model")
+```
+
+# CN: "这个功能经常出错!" 
+```{r classification loop 3}
+input_text <- "这个功能经常出错!"
+
+# 8. Loop through each model
+for (i in seq_along(models)) {
+  model_name <- names(models)[i]
+  url <- models[[i]]
+  
+  # --- Sentiment classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_sentiment <- list(inputs = input_text, parameters = list(candidate_labels = sentiment_labels))
+  } else {
+    body_sentiment <- list(inputs = input_text)
+  }
+  res1 <- POST(url, headers, body = body_sentiment, encode = "json")
+  result1 <- content(res1, as = "parsed", encoding = "UTF-8")
+  output_df$Sentiment[i] <- extract_top_label(result1)
+  
+  # --- Topic classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_topic <- list(inputs = input_text, parameters = list(candidate_labels = topic_labels))
+    res2 <- POST(url, headers, body = body_topic, encode = "json")
+    result2 <- content(res2, as = "parsed", encoding = "UTF-8")
+    output_df$Category[i] <- extract_top_label(result2)
+  } else {
+    output_df$Category[i] <- NA  # Not supported by fixed sentiment-only models
+  }
+}
+
+# 9. Display results
+kable(output_df, caption = "Top classification results per model")
+```
+
+
+# DE: "Zu viele nervige Werbungen, es macht keinen Spaß mehr" 
+```{r classification loop 4}
+input_text <- "Zu viele nervige Werbungen, es macht keinen Spaß mehr"
+
+# 8. Loop through each model
+for (i in seq_along(models)) {
+  model_name <- names(models)[i]
+  url <- models[[i]]
+  
+  # --- Sentiment classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_sentiment <- list(inputs = input_text, parameters = list(candidate_labels = sentiment_labels))
+  } else {
+    body_sentiment <- list(inputs = input_text)
+  }
+  res1 <- POST(url, headers, body = body_sentiment, encode = "json")
+  result1 <- content(res1, as = "parsed", encoding = "UTF-8")
+  output_df$Sentiment[i] <- extract_top_label(result1)
+  
+  # --- Topic classification ---
+  if (grepl("mnli|xnli", model_name)) {
+    body_topic <- list(inputs = input_text, parameters = list(candidate_labels = topic_labels))
+    res2 <- POST(url, headers, body = body_topic, encode = "json")
+    result2 <- content(res2, as = "parsed", encoding = "UTF-8")
+    output_df$Category[i] <- extract_top_label(result2)
+  } else {
+    output_df$Category[i] <- NA  # Not supported by fixed sentiment-only models
+  }
+}
+
+# 9. Display results
+kable(output_df, caption = "Top classification results per model")
+```
+
